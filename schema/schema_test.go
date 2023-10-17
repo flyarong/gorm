@@ -145,8 +145,7 @@ func TestParseSchemaWithAdvancedDataType(t *testing.T) {
 	}
 }
 
-type CustomizeTable struct {
-}
+type CustomizeTable struct{}
 
 func (CustomizeTable) TableName() string {
 	return "customize"
@@ -165,7 +164,6 @@ func TestCustomizeTableName(t *testing.T) {
 
 func TestNestedModel(t *testing.T) {
 	versionUser, err := schema.Parse(&VersionUser{}, &sync.Map{}, schema.NamingStrategy{})
-
 	if err != nil {
 		t.Fatalf("failed to parse nested user, got error %v", err)
 	}
@@ -204,7 +202,6 @@ func TestEmbeddedStruct(t *testing.T) {
 	}
 
 	cropSchema, err := schema.Parse(&Corp{}, &sync.Map{}, schema.NamingStrategy{})
-
 	if err != nil {
 		t.Fatalf("failed to parse embedded struct with primary key, got error %v", err)
 	}
@@ -273,7 +270,6 @@ func TestEmbeddedStructForCustomizedNamingStrategy(t *testing.T) {
 	}
 
 	cropSchema, err := schema.Parse(&Corp{}, &sync.Map{}, CustomizedNamingStrategy{schema.NamingStrategy{}})
-
 	if err != nil {
 		t.Fatalf("failed to parse embedded struct with primary key, got error %v", err)
 	}
@@ -295,5 +291,46 @@ func TestEmbeddedStructForCustomizedNamingStrategy(t *testing.T) {
 				f.Readable = true
 			}
 		})
+	}
+}
+
+func TestCompositePrimaryKeyWithAutoIncrement(t *testing.T) {
+	type Product struct {
+		ProductID    uint `gorm:"primaryKey;autoIncrement"`
+		LanguageCode uint `gorm:"primaryKey"`
+		Code         string
+		Name         string
+	}
+	type ProductNonAutoIncrement struct {
+		ProductID    uint `gorm:"primaryKey;autoIncrement:false"`
+		LanguageCode uint `gorm:"primaryKey"`
+		Code         string
+		Name         string
+	}
+
+	product, err := schema.Parse(&Product{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatalf("failed to parse product struct with composite primary key, got error %v", err)
+	}
+
+	prioritizedPrimaryField := schema.Field{
+		Name: "ProductID", DBName: "product_id", BindNames: []string{"ProductID"}, DataType: schema.Uint, PrimaryKey: true, Size: 64, HasDefaultValue: true, AutoIncrement: true, TagSettings: map[string]string{"PRIMARYKEY": "PRIMARYKEY", "AUTOINCREMENT": "AUTOINCREMENT"},
+	}
+
+	product.Fields = []*schema.Field{product.PrioritizedPrimaryField}
+
+	checkSchemaField(t, product, &prioritizedPrimaryField, func(f *schema.Field) {
+		f.Creatable = true
+		f.Updatable = true
+		f.Readable = true
+	})
+
+	productNonAutoIncrement, err := schema.Parse(&ProductNonAutoIncrement{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatalf("failed to parse productNonAutoIncrement struct with composite primary key, got error %v", err)
+	}
+
+	if productNonAutoIncrement.PrioritizedPrimaryField != nil {
+		t.Fatalf("PrioritizedPrimaryField of non autoincrement composite key should be nil")
 	}
 }

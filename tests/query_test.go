@@ -2,6 +2,7 @@ package tests_test
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -17,7 +18,7 @@ import (
 )
 
 func TestFind(t *testing.T) {
-	var users = []User{
+	users := []User{
 		*GetUser("find", Config{}),
 		*GetUser("find", Config{}),
 		*GetUser("find", Config{}),
@@ -57,7 +58,7 @@ func TestFind(t *testing.T) {
 	}
 
 	t.Run("FirstMap", func(t *testing.T) {
-		var first = map[string]interface{}{}
+		first := map[string]interface{}{}
 		if err := DB.Model(&User{}).Where("name = ?", "find").First(first).Error; err != nil {
 			t.Errorf("errors happened when query first: %v", err)
 		} else {
@@ -88,7 +89,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FirstMapWithTable", func(t *testing.T) {
-		var first = map[string]interface{}{}
+		first := map[string]interface{}{}
 		if err := DB.Table("users").Where("name = ?", "find").Find(first).Error; err != nil {
 			t.Errorf("errors happened when query first: %v", err)
 		} else {
@@ -120,7 +121,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FirstPtrMap", func(t *testing.T) {
-		var first = map[string]interface{}{}
+		first := map[string]interface{}{}
 		if err := DB.Model(&User{}).Where("name = ?", "find").First(&first).Error; err != nil {
 			t.Errorf("errors happened when query first: %v", err)
 		} else {
@@ -135,7 +136,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FirstSliceOfMap", func(t *testing.T) {
-		var allMap = []map[string]interface{}{}
+		allMap := []map[string]interface{}{}
 		if err := DB.Model(&User{}).Where("name = ?", "find").Find(&allMap).Error; err != nil {
 			t.Errorf("errors happened when query find: %v", err)
 		} else {
@@ -170,7 +171,7 @@ func TestFind(t *testing.T) {
 	})
 
 	t.Run("FindSliceOfMapWithTable", func(t *testing.T) {
-		var allMap = []map[string]interface{}{}
+		allMap := []map[string]interface{}{}
 		if err := DB.Table("users").Where("name = ?", "find").Find(&allMap).Error; err != nil {
 			t.Errorf("errors happened when query find: %v", err)
 		} else {
@@ -216,6 +217,30 @@ func TestFind(t *testing.T) {
 		}
 	}
 
+	// test array
+	var models2 [3]User
+	if err := DB.Where("name in (?)", []string{"find"}).Find(&models2).Error; err != nil {
+		t.Errorf("errors happened when query find with in clause: %v, length: %v", err, len(models2))
+	} else {
+		for idx, user := range users {
+			t.Run("FindWithInClause#"+strconv.Itoa(idx+1), func(t *testing.T) {
+				CheckUser(t, models2[idx], user)
+			})
+		}
+	}
+
+	// test smaller array
+	var models3 [2]User
+	if err := DB.Where("name in (?)", []string{"find"}).Find(&models3).Error; err != nil {
+		t.Errorf("errors happened when query find with in clause: %v, length: %v", err, len(models3))
+	} else {
+		for idx, user := range users[:2] {
+			t.Run("FindWithInClause#"+strconv.Itoa(idx+1), func(t *testing.T) {
+				CheckUser(t, models3[idx], user)
+			})
+		}
+	}
+
 	var none []User
 	if err := DB.Where("name in (?)", []string{}).Find(&none).Error; err != nil || len(none) != 0 {
 		t.Errorf("errors happened when query find with in clause and zero length parameter: %v, length: %v", err, len(none))
@@ -241,7 +266,7 @@ func TestQueryWithAssociation(t *testing.T) {
 }
 
 func TestFindInBatches(t *testing.T) {
-	var users = []User{
+	users := []User{
 		*GetUser("find_in_batches", Config{}),
 		*GetUser("find_in_batches", Config{}),
 		*GetUser("find_in_batches", Config{}),
@@ -257,7 +282,7 @@ func TestFindInBatches(t *testing.T) {
 		totalBatch int
 	)
 
-	if result := DB.Where("name = ?", users[0].Name).FindInBatches(&results, 2, func(tx *gorm.DB, batch int) error {
+	if result := DB.Table("users as u").Where("name = ?", users[0].Name).FindInBatches(&results, 2, func(tx *gorm.DB, batch int) error {
 		totalBatch += batch
 
 		if tx.RowsAffected != 2 {
@@ -273,7 +298,7 @@ func TestFindInBatches(t *testing.T) {
 		}
 
 		if err := tx.Save(results).Error; err != nil {
-			t.Errorf("failed to save users, got error %v", err)
+			t.Fatalf("failed to save users, got error %v", err)
 		}
 
 		return nil
@@ -292,12 +317,74 @@ func TestFindInBatches(t *testing.T) {
 	}
 }
 
+func TestFindInBatchesWithOffsetLimit(t *testing.T) {
+	users := []User{
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+		*GetUser("find_in_batches_with_offset_limit", Config{}),
+	}
+
+	DB.Create(&users)
+
+	var (
+		sub, results []User
+		lastBatch    int
+	)
+
+	// offset limit
+	if result := DB.Offset(3).Limit(5).Where("name = ?", users[0].Name).FindInBatches(&sub, 2, func(tx *gorm.DB, batch int) error {
+		results = append(results, sub...)
+		lastBatch = batch
+		return nil
+	}); result.Error != nil || result.RowsAffected != 5 {
+		t.Errorf("Failed to batch find, got error %v, rows affected: %v", result.Error, result.RowsAffected)
+	}
+	if lastBatch != 3 {
+		t.Fatalf("incorrect last batch, expected: %v, got: %v", 3, lastBatch)
+	}
+
+	targetUsers := users[3:8]
+	for i := 0; i < len(targetUsers); i++ {
+		AssertEqual(t, results[i], targetUsers[i])
+	}
+
+	var sub1 []User
+	// limit < batchSize
+	if result := DB.Limit(5).Where("name = ?", users[0].Name).FindInBatches(&sub1, 10, func(tx *gorm.DB, batch int) error {
+		return nil
+	}); result.Error != nil || result.RowsAffected != 5 {
+		t.Errorf("Failed to batch find, got error %v, rows affected: %v", result.Error, result.RowsAffected)
+	}
+
+	var sub2 []User
+	// only offset
+	if result := DB.Offset(3).Where("name = ?", users[0].Name).FindInBatches(&sub2, 2, func(tx *gorm.DB, batch int) error {
+		return nil
+	}); result.Error != nil || result.RowsAffected != 7 {
+		t.Errorf("Failed to batch find, got error %v, rows affected: %v", result.Error, result.RowsAffected)
+	}
+
+	var sub3 []User
+	if result := DB.Limit(4).Where("name = ?", users[0].Name).FindInBatches(&sub3, 2, func(tx *gorm.DB, batch int) error {
+		return nil
+	}); result.Error != nil || result.RowsAffected != 4 {
+		t.Errorf("Failed to batch find, got error %v, rows affected: %v", result.Error, result.RowsAffected)
+	}
+}
+
 func TestFindInBatchesWithError(t *testing.T) {
 	if name := DB.Dialector.Name(); name == "sqlserver" {
 		t.Skip("skip sqlserver due to it will raise data race for invalid sql")
 	}
 
-	var users = []User{
+	users := []User{
 		*GetUser("find_in_batches_with_error", Config{}),
 		*GetUser("find_in_batches_with_error", Config{}),
 		*GetUser("find_in_batches_with_error", Config{}),
@@ -321,6 +408,13 @@ func TestFindInBatchesWithError(t *testing.T) {
 	}
 	if totalBatch != 0 {
 		t.Fatalf("incorrect total batch, expected: %v, got: %v", 0, totalBatch)
+	}
+
+	if result := DB.Omit("id").Where("name = ?", users[0].Name).FindInBatches(&results, 2, func(tx *gorm.DB, batch int) error {
+		totalBatch += batch
+		return nil
+	}); result.Error != gorm.ErrPrimaryKeyRequired {
+		t.Fatal("expected errors to have occurred, but nothing happened")
 	}
 }
 
@@ -436,6 +530,11 @@ func TestNot(t *testing.T) {
 		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
 	}
 
+	result = dryDB.Not(map[string]interface{}{"name": []string{}}).Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*name.* IS NOT NULL").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
+	}
+
 	result = dryDB.Not(map[string]interface{}{"name": []string{"jinzhu", "jinzhu 2"}}).Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*name.* NOT IN \\(.+,.+\\)").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build NOT condition, but got %v", result.Statement.SQL.String())
@@ -507,7 +606,13 @@ func TestNotWithAllFields(t *testing.T) {
 func TestOr(t *testing.T) {
 	dryDB := DB.Session(&gorm.Session{DryRun: true})
 
-	result := dryDB.Where("role = ?", "admin").Where(DB.Or("role = ?", "super_admin")).Find(&User{})
+	var count int64
+	result := dryDB.Model(&User{}).Or("role = ?", "admin").Count(&count)
+	if !regexp.MustCompile("SELECT count\\(\\*\\) FROM .*users.* WHERE role = .+ AND .*users.*\\..*deleted_at.* IS NULL").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Where("role = ?", "admin").Where(DB.Or("role = ?", "super_admin")).Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*role.* = .+ AND .*role.* = .+").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
 	}
@@ -554,6 +659,18 @@ func TestOrWithAllFields(t *testing.T) {
 	}
 }
 
+type Int64 int64
+
+func (v Int64) Value() (driver.Value, error) {
+	return v - 1, nil
+}
+
+func (f *Int64) Scan(v interface{}) error {
+	y := v.(int64)
+	*f = Int64(y + 1)
+	return nil
+}
+
 func TestPluck(t *testing.T) {
 	users := []*User{
 		GetUser("pluck-user1", Config{}),
@@ -572,10 +689,17 @@ func TestPluck(t *testing.T) {
 	if err := DB.Model(User{}).Where("name like ?", "pluck-user%").Order("name desc").Pluck("name", &names2).Error; err != nil {
 		t.Errorf("got error when pluck name: %v", err)
 	}
-	AssertEqual(t, names, sort.Reverse(sort.StringSlice(names2)))
+
+	sort.Slice(names2, func(i, j int) bool { return names2[i] < names2[j] })
+	AssertEqual(t, names, names2)
 
 	var ids []int
 	if err := DB.Model(User{}).Where("name like ?", "pluck-user%").Pluck("id", &ids).Error; err != nil {
+		t.Errorf("got error when pluck id: %v", err)
+	}
+
+	var ids2 []Int64
+	if err := DB.Model(User{}).Where("name like ?", "pluck-user%").Pluck("id", &ids2).Error; err != nil {
 		t.Errorf("got error when pluck id: %v", err)
 	}
 
@@ -587,6 +711,12 @@ func TestPluck(t *testing.T) {
 
 	for idx, id := range ids {
 		if int(id) != int(users[idx].ID) {
+			t.Errorf("Unexpected result on pluck id, got %+v", ids)
+		}
+	}
+
+	for idx, id := range ids2 {
+		if int(id) != int(users[idx].ID+1) {
 			t.Errorf("Unexpected result on pluck id, got %+v", ids)
 		}
 	}
@@ -842,7 +972,17 @@ func TestSearchWithEmptyChain(t *testing.T) {
 func TestOrder(t *testing.T) {
 	dryDB := DB.Session(&gorm.Session{DryRun: true})
 
-	result := dryDB.Order("age desc, name").Find(&User{})
+	result := dryDB.Order("").Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* IS NULL$").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Order(nil).Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* IS NULL$").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
+	}
+
+	result = dryDB.Order("age desc, name").Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* ORDER BY age desc, name").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build Order condition, but got %v", result.Statement.SQL.String())
 	}
@@ -1136,4 +1276,131 @@ func TestQueryWithTableAndConditionsAndAllFields(t *testing.T) {
 	if !regexp.MustCompile(userQuery + `WHERE .user.\..name. = .+ AND .user.\..deleted_at. IS NULL`).MatchString(result.Statement.SQL.String()) {
 		t.Errorf("invalid query SQL, got %v", result.Statement.SQL.String())
 	}
+}
+
+type DoubleInt64 struct {
+	data int64
+}
+
+func (t *DoubleInt64) Scan(val interface{}) error {
+	switch v := val.(type) {
+	case int64:
+		t.data = v * 2
+		return nil
+	default:
+		return fmt.Errorf("DoubleInt64 cant not scan with:%v", v)
+	}
+}
+
+// https://github.com/go-gorm/gorm/issues/5091
+func TestQueryScannerWithSingleColumn(t *testing.T) {
+	user := User{Name: "scanner_raw_1", Age: 10}
+	DB.Create(&user)
+
+	var result1 DoubleInt64
+	if err := DB.Model(&User{}).Where("name LIKE ?", "scanner_raw_%").Limit(1).Pluck(
+		"age", &result1).Error; err != nil {
+		t.Errorf("Failed, got error: %v", err)
+	}
+
+	AssertEqual(t, result1.data, 20)
+
+	var result2 DoubleInt64
+	if err := DB.Model(&User{}).Where("name LIKE ?", "scanner_raw_%").Limit(1).Select(
+		"age").Scan(&result2).Error; err != nil {
+		t.Errorf("Failed, got error: %v", err)
+	}
+
+	AssertEqual(t, result2.data, 20)
+}
+
+func TestQueryResetNullValue(t *testing.T) {
+	type QueryResetItem struct {
+		ID   string `gorm:"type:varchar(5)"`
+		Name string
+	}
+
+	type QueryResetNullValue struct {
+		ID      int
+		Name    string     `gorm:"default:NULL"`
+		Flag    bool       `gorm:"default:NULL"`
+		Number1 int64      `gorm:"default:NULL"`
+		Number2 uint64     `gorm:"default:NULL"`
+		Number3 float64    `gorm:"default:NULL"`
+		Now     *time.Time `gorm:"defalut:NULL"`
+		Item1Id string
+		Item1   *QueryResetItem `gorm:"references:ID"`
+		Item2Id string
+		Item2   *QueryResetItem `gorm:"references:ID"`
+	}
+
+	DB.Migrator().DropTable(&QueryResetNullValue{}, &QueryResetItem{})
+	DB.AutoMigrate(&QueryResetNullValue{}, &QueryResetItem{})
+
+	now := time.Now()
+	q1 := QueryResetNullValue{
+		Name:    "name",
+		Flag:    true,
+		Number1: 100,
+		Number2: 200,
+		Number3: 300.1,
+		Now:     &now,
+		Item1: &QueryResetItem{
+			ID:   "u_1_1",
+			Name: "item_1_1",
+		},
+		Item2: &QueryResetItem{
+			ID:   "u_1_2",
+			Name: "item_1_2",
+		},
+	}
+
+	q2 := QueryResetNullValue{
+		Item1: &QueryResetItem{
+			ID:   "u_2_1",
+			Name: "item_2_1",
+		},
+		Item2: &QueryResetItem{
+			ID:   "u_2_2",
+			Name: "item_2_2",
+		},
+	}
+
+	var err error
+	err = DB.Create(&q1).Error
+	if err != nil {
+		t.Errorf("failed to create:%v", err)
+	}
+
+	err = DB.Create(&q2).Error
+	if err != nil {
+		t.Errorf("failed to create:%v", err)
+	}
+
+	var qs []QueryResetNullValue
+	err = DB.Joins("Item1").Joins("Item2").Find(&qs).Error
+	if err != nil {
+		t.Errorf("failed to find:%v", err)
+	}
+
+	if len(qs) != 2 {
+		t.Fatalf("find count not equal:%d", len(qs))
+	}
+
+	AssertEqual(t, q1, qs[0])
+	AssertEqual(t, q2, qs[1])
+}
+
+func TestQueryError(t *testing.T) {
+	type P struct{}
+	var p1 P
+	err := DB.Take(&p1, 1).Error
+	AssertEqual(t, err, gorm.ErrModelAccessibleFieldsRequired)
+
+	var p2 interface{}
+
+	err = DB.Table("ps").Clauses(clause.Eq{Column: clause.Column{
+		Table: clause.CurrentTable, Name: clause.PrimaryKey,
+	}, Value: 1}).Scan(&p2).Error
+	AssertEqual(t, err, gorm.ErrModelValueRequired)
 }

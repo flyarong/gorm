@@ -13,7 +13,7 @@ import (
 )
 
 func TestCreate(t *testing.T) {
-	var user = *GetUser("create", Config{})
+	user := *GetUser("create", Config{})
 
 	if results := DB.Create(&user); results.Error != nil {
 		t.Fatalf("errors happened when create: %v", results.Error)
@@ -123,7 +123,7 @@ func TestCreateFromMap(t *testing.T) {
 		{"name": "create_from_map_3", "Age": 20},
 	}
 
-	if err := DB.Model(&User{}).Create(datas).Error; err != nil {
+	if err := DB.Model(&User{}).Create(&datas).Error; err != nil {
 		t.Fatalf("failed to create data from slice of map, got error: %v", err)
 	}
 
@@ -139,7 +139,7 @@ func TestCreateFromMap(t *testing.T) {
 }
 
 func TestCreateWithAssociations(t *testing.T) {
-	var user = *GetUser("create_with_associations", Config{
+	user := *GetUser("create_with_associations", Config{
 		Account:   true,
 		Pets:      2,
 		Toys:      3,
@@ -223,7 +223,7 @@ func TestBulkCreatePtrDataWithAssociations(t *testing.T) {
 
 func TestPolymorphicHasOne(t *testing.T) {
 	t.Run("Struct", func(t *testing.T) {
-		var pet = Pet{
+		pet := Pet{
 			Name: "PolymorphicHasOne",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne"},
 		}
@@ -240,7 +240,7 @@ func TestPolymorphicHasOne(t *testing.T) {
 	})
 
 	t.Run("Slice", func(t *testing.T) {
-		var pets = []Pet{{
+		pets := []Pet{{
 			Name: "PolymorphicHasOne-Slice-1",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne-Slice-1"},
 		}, {
@@ -269,7 +269,7 @@ func TestPolymorphicHasOne(t *testing.T) {
 	})
 
 	t.Run("SliceOfPtr", func(t *testing.T) {
-		var pets = []*Pet{{
+		pets := []*Pet{{
 			Name: "PolymorphicHasOne-Slice-1",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne-Slice-1"},
 		}, {
@@ -290,7 +290,7 @@ func TestPolymorphicHasOne(t *testing.T) {
 	})
 
 	t.Run("Array", func(t *testing.T) {
-		var pets = [...]Pet{{
+		pets := [...]Pet{{
 			Name: "PolymorphicHasOne-Array-1",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne-Array-1"},
 		}, {
@@ -311,7 +311,7 @@ func TestPolymorphicHasOne(t *testing.T) {
 	})
 
 	t.Run("ArrayPtr", func(t *testing.T) {
-		var pets = [...]*Pet{{
+		pets := [...]*Pet{{
 			Name: "PolymorphicHasOne-Array-1",
 			Toy:  Toy{Name: "Toy-PolymorphicHasOne-Array-1"},
 		}, {
@@ -348,12 +348,12 @@ func TestCreateEmptyStruct(t *testing.T) {
 }
 
 func TestCreateEmptySlice(t *testing.T) {
-	var data = []User{}
+	data := []User{}
 	if err := DB.Create(&data).Error; err != gorm.ErrEmptySlice {
 		t.Errorf("no data should be created, got %v", err)
 	}
 
-	var sliceMap = []map[string]interface{}{}
+	sliceMap := []map[string]interface{}{}
 	if err := DB.Model(&User{}).Create(&sliceMap).Error; err != gorm.ErrEmptySlice {
 		t.Errorf("no data should be created, got %v", err)
 	}
@@ -476,6 +476,13 @@ func TestOmitWithCreate(t *testing.T) {
 	CheckUser(t, result2, user2)
 }
 
+func TestFirstOrCreateNotExistsTable(t *testing.T) {
+	company := Company{Name: "first_or_create_if_not_exists_table"}
+	if err := DB.Table("not_exists").FirstOrCreate(&company).Error; err == nil {
+		t.Errorf("not exists table, but err is nil")
+	}
+}
+
 func TestFirstOrCreateWithPrimaryKey(t *testing.T) {
 	company := Company{ID: 100, Name: "company100_with_primarykey"}
 	DB.FirstOrCreate(&company)
@@ -516,4 +523,95 @@ func TestCreateFromSubQuery(t *testing.T) {
 	if !regexp.MustCompile(`INSERT INTO .pets. \(.name.,.user_id.\) .*VALUES \(.+,\(SELECT @uid:=id FROM \(SELECT id FROM .users. WHERE name=.+\) as tmp\)\),\(.+,@uid\)`).MatchString(result.Statement.SQL.String()) {
 		t.Errorf("invalid insert SQL, got %v", result.Statement.SQL.String())
 	}
+}
+
+func TestCreateNilPointer(t *testing.T) {
+	var user *User
+
+	err := DB.Create(user).Error
+	if err == nil || err != gorm.ErrInvalidValue {
+		t.Fatalf("it is not ErrInvalidValue")
+	}
+}
+
+func TestFirstOrCreateRowsAffected(t *testing.T) {
+	user := User{Name: "TestFirstOrCreateRowsAffected"}
+
+	res := DB.FirstOrCreate(&user, "name = ?", user.Name)
+	if res.Error != nil || res.RowsAffected != 1 {
+		t.Fatalf("first or create rows affect err:%v rows:%d", res.Error, res.RowsAffected)
+	}
+
+	res = DB.FirstOrCreate(&user, "name = ?", user.Name)
+	if res.Error != nil || res.RowsAffected != 0 {
+		t.Fatalf("first or create rows affect err:%v rows:%d", res.Error, res.RowsAffected)
+	}
+}
+
+func TestCreateWithAutoIncrementCompositeKey(t *testing.T) {
+	type CompositeKeyProduct struct {
+		ProductID    int `gorm:"primaryKey;autoIncrement:true;"` // primary key
+		LanguageCode int `gorm:"primaryKey;"`                    // primary key
+		Code         string
+		Name         string
+	}
+
+	if err := DB.Migrator().DropTable(&CompositeKeyProduct{}); err != nil {
+		t.Fatalf("failed to migrate, got error %v", err)
+	}
+	if err := DB.AutoMigrate(&CompositeKeyProduct{}); err != nil {
+		t.Fatalf("failed to migrate, got error %v", err)
+	}
+
+	prod := &CompositeKeyProduct{
+		LanguageCode: 56,
+		Code:         "Code56",
+		Name:         "ProductName56",
+	}
+	if err := DB.Create(&prod).Error; err != nil {
+		t.Fatalf("failed to create, got error %v", err)
+	}
+
+	newProd := &CompositeKeyProduct{}
+	if err := DB.First(&newProd).Error; err != nil {
+		t.Fatalf("errors happened when query: %v", err)
+	} else {
+		AssertObjEqual(t, newProd, prod, "ProductID", "LanguageCode", "Code", "Name")
+	}
+}
+
+func TestCreateOnConfilctWithDefalutNull(t *testing.T) {
+	type OnConfilctUser struct {
+		ID     string
+		Name   string `gorm:"default:null"`
+		Email  string
+		Mobile string `gorm:"default:'133xxxx'"`
+	}
+
+	err := DB.Migrator().DropTable(&OnConfilctUser{})
+	AssertEqual(t, err, nil)
+	err = DB.AutoMigrate(&OnConfilctUser{})
+	AssertEqual(t, err, nil)
+
+	u := OnConfilctUser{
+		ID:     "on-confilct-user-id",
+		Name:   "on-confilct-user-name",
+		Email:  "on-confilct-user-email",
+		Mobile: "on-confilct-user-mobile",
+	}
+	err = DB.Create(&u).Error
+	AssertEqual(t, err, nil)
+
+	u.Name = "on-confilct-user-name-2"
+	u.Email = "on-confilct-user-email-2"
+	u.Mobile = ""
+	err = DB.Clauses(clause.OnConflict{UpdateAll: true}).Create(&u).Error
+	AssertEqual(t, err, nil)
+
+	var u2 OnConfilctUser
+	err = DB.Where("id = ?", u.ID).First(&u2).Error
+	AssertEqual(t, err, nil)
+	AssertEqual(t, u2.Name, "on-confilct-user-name-2")
+	AssertEqual(t, u2.Email, "on-confilct-user-email-2")
+	AssertEqual(t, u2.Mobile, "133xxxx")
 }

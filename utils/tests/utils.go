@@ -13,8 +13,14 @@ import (
 
 func AssertObjEqual(t *testing.T, r, e interface{}, names ...string) {
 	for _, name := range names {
-		got := reflect.Indirect(reflect.ValueOf(r)).FieldByName(name).Interface()
-		expect := reflect.Indirect(reflect.ValueOf(e)).FieldByName(name).Interface()
+		rv := reflect.Indirect(reflect.ValueOf(r))
+		ev := reflect.Indirect(reflect.ValueOf(e))
+		if rv.IsValid() != ev.IsValid() {
+			t.Errorf("%v: expect: %+v, got %+v", utils.FileWithLineNum(), r, e)
+			return
+		}
+		got := rv.FieldByName(name).Interface()
+		expect := ev.FieldByName(name).Interface()
 		t.Run(name, func(t *testing.T) {
 			AssertEqual(t, got, expect)
 		})
@@ -83,20 +89,22 @@ func AssertEqual(t *testing.T, got, expect interface{}) {
 		}
 
 		if reflect.ValueOf(got).Kind() == reflect.Struct {
-			if reflect.ValueOf(got).NumField() == reflect.ValueOf(expect).NumField() {
-				exported := false
-				for i := 0; i < reflect.ValueOf(got).NumField(); i++ {
-					if fieldStruct := reflect.ValueOf(got).Type().Field(i); ast.IsExported(fieldStruct.Name) {
-						exported = true
-						field := reflect.ValueOf(got).Field(i)
-						t.Run(fieldStruct.Name, func(t *testing.T) {
-							AssertEqual(t, field.Interface(), reflect.ValueOf(expect).Field(i).Interface())
-						})
+			if reflect.ValueOf(expect).Kind() == reflect.Struct {
+				if reflect.ValueOf(got).NumField() == reflect.ValueOf(expect).NumField() {
+					exported := false
+					for i := 0; i < reflect.ValueOf(got).NumField(); i++ {
+						if fieldStruct := reflect.ValueOf(got).Type().Field(i); ast.IsExported(fieldStruct.Name) {
+							exported = true
+							field := reflect.ValueOf(got).Field(i)
+							t.Run(fieldStruct.Name, func(t *testing.T) {
+								AssertEqual(t, field.Interface(), reflect.ValueOf(expect).Field(i).Interface())
+							})
+						}
 					}
-				}
 
-				if exported {
-					return
+					if exported {
+						return
+					}
 				}
 			}
 		}
@@ -107,6 +115,9 @@ func AssertEqual(t *testing.T, got, expect interface{}) {
 		} else if reflect.ValueOf(expect).Type().ConvertibleTo(reflect.ValueOf(got).Type()) {
 			expect = reflect.ValueOf(got).Convert(reflect.ValueOf(got).Type()).Interface()
 			isEqual()
+		} else {
+			t.Errorf("%v: expect: %+v, got %+v", utils.FileWithLineNum(), expect, got)
+			return
 		}
 	}
 }

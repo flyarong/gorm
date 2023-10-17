@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
+	"gorm.io/gorm/utils/tests"
 	. "gorm.io/gorm/utils/tests"
 )
 
@@ -27,6 +29,26 @@ func TestTable(t *testing.T) {
 
 	r = dryDB.Table("user as u").Select("name").Find(&User{}).Statement
 	if !regexp.MustCompile("SELECT .name. FROM user as u WHERE .u.\\..deleted_at. IS NULL").MatchString(r.Statement.SQL.String()) {
+		t.Errorf("Table with escape character, got %v", r.Statement.SQL.String())
+	}
+
+	r = dryDB.Table("`people`").Table("`user`").Find(&User{}).Statement
+	if !regexp.MustCompile("SELECT \\* FROM `user`").MatchString(r.Statement.SQL.String()) {
+		t.Errorf("Table with escape character, got %v", r.Statement.SQL.String())
+	}
+
+	r = dryDB.Table("people as p").Table("user as u").Find(&User{}).Statement
+	if !regexp.MustCompile("SELECT \\* FROM user as u WHERE .u.\\..deleted_at. IS NULL").MatchString(r.Statement.SQL.String()) {
+		t.Errorf("Table with escape character, got %v", r.Statement.SQL.String())
+	}
+
+	r = dryDB.Table("people as p").Table("user").Find(&User{}).Statement
+	if !regexp.MustCompile("SELECT \\* FROM .user. WHERE .user.\\..deleted_at. IS NULL").MatchString(r.Statement.SQL.String()) {
+		t.Errorf("Table with escape character, got %v", r.Statement.SQL.String())
+	}
+
+	r = dryDB.Table("gorm.people").Table("user").Find(&User{}).Statement
+	if !regexp.MustCompile("SELECT \\* FROM .user. WHERE .user.\\..deleted_at. IS NULL").MatchString(r.Statement.SQL.String()) {
 		t.Errorf("Table with escape character, got %v", r.Statement.SQL.String())
 	}
 
@@ -124,4 +146,29 @@ func TestTableWithAllFields(t *testing.T) {
 	}
 
 	AssertEqual(t, r.Statement.Vars, []interface{}{2, 4, 1, 3})
+}
+
+type UserWithTableNamer struct {
+	gorm.Model
+	Name string
+}
+
+func (UserWithTableNamer) TableName(namer schema.Namer) string {
+	return namer.TableName("user")
+}
+
+func TestTableWithNamer(t *testing.T) {
+	db, _ := gorm.Open(tests.DummyDialector{}, &gorm.Config{
+		NamingStrategy: schema.NamingStrategy{
+			TablePrefix: "t_",
+		},
+	})
+
+	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return tx.Model(&UserWithTableNamer{}).Find(&UserWithTableNamer{})
+	})
+
+	if !regexp.MustCompile("SELECT \\* FROM `t_users`").MatchString(sql) {
+		t.Errorf("Table with namer, got %v", sql)
+	}
 }

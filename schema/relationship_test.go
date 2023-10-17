@@ -10,7 +10,7 @@ import (
 
 func checkStructRelation(t *testing.T, data interface{}, relations ...Relation) {
 	if s, err := schema.Parse(data, &sync.Map{}, schema.NamingStrategy{}); err != nil {
-		t.Errorf("Failed to parse schema")
+		t.Errorf("Failed to parse schema, got error %v", err)
 	} else {
 		for _, rel := range relations {
 			checkSchemaRelation(t, s, rel)
@@ -93,6 +93,20 @@ func TestBelongsToWithOnlyReferences2(t *testing.T) {
 	})
 }
 
+func TestSelfReferentialBelongsTo(t *testing.T) {
+	type User struct {
+		ID        int32 `gorm:"primaryKey"`
+		Name      string
+		CreatorID *int32
+		Creator   *User
+	}
+
+	checkStructRelation(t, &User{}, Relation{
+		Name: "Creator", Type: schema.BelongsTo, Schema: "User", FieldSchema: "User",
+		References: []Reference{{"ID", "User", "CreatorID", "User", "", false}},
+	})
+}
+
 func TestSelfReferentialBelongsToOverrideReferences(t *testing.T) {
 	type User struct {
 		ID        int32 `gorm:"primaryKey"`
@@ -141,6 +155,24 @@ func TestHasOneOverrideReferences(t *testing.T) {
 	checkStructRelation(t, &User{}, Relation{
 		Name: "Profile", Type: schema.HasOne, Schema: "User", FieldSchema: "Profile",
 		References: []Reference{{"Refer", "User", "UserID", "Profile", "", true}},
+	})
+}
+
+func TestHasOneOverrideReferences2(t *testing.T) {
+	type Profile struct {
+		gorm.Model
+		Name string
+	}
+
+	type User struct {
+		gorm.Model
+		ProfileID uint     `gorm:"column:profile_id"`
+		Profile   *Profile `gorm:"foreignKey:ID;references:ProfileID"`
+	}
+
+	checkStructRelation(t, &User{}, Relation{
+		Name: "Profile", Type: schema.HasOne, Schema: "User", FieldSchema: "Profile",
+		References: []Reference{{"ProfileID", "User", "ID", "Profile", "", true}},
 	})
 }
 
@@ -269,6 +301,33 @@ func TestMany2ManyOverrideForeignKey(t *testing.T) {
 		References: []Reference{
 			{"Refer", "User", "UserRefer", "user_profiles", "", true},
 			{"UserRefer", "Profile", "ProfileUserRefer", "user_profiles", "", false},
+		},
+	})
+}
+
+func TestMany2ManySharedForeignKey(t *testing.T) {
+	type Profile struct {
+		gorm.Model
+		Name         string
+		Kind         string
+		ProfileRefer uint
+	}
+
+	type User struct {
+		gorm.Model
+		Profiles []Profile `gorm:"many2many:user_profiles;foreignKey:Refer,Kind;joinForeignKey:UserRefer,Kind;References:ProfileRefer,Kind;joinReferences:ProfileR,Kind"`
+		Kind     string
+		Refer    uint
+	}
+
+	checkStructRelation(t, &User{}, Relation{
+		Name: "Profiles", Type: schema.Many2Many, Schema: "User", FieldSchema: "Profile",
+		JoinTable: JoinTable{Name: "user_profiles", Table: "user_profiles"},
+		References: []Reference{
+			{"Refer", "User", "UserRefer", "user_profiles", "", true},
+			{"Kind", "User", "Kind", "user_profiles", "", true},
+			{"ProfileRefer", "Profile", "ProfileR", "user_profiles", "", false},
+			{"Kind", "Profile", "Kind", "user_profiles", "", false},
 		},
 	})
 }
@@ -459,6 +518,152 @@ func TestEmbeddedRelation(t *testing.T) {
 	}
 }
 
+func TestEmbeddedHas(t *testing.T) {
+	type Toy struct {
+		ID        int
+		Name      string
+		OwnerID   int
+		OwnerType string
+	}
+	type User struct {
+		ID  int
+		Cat struct {
+			Name string
+			Toy  Toy   `gorm:"polymorphic:Owner;"`
+			Toys []Toy `gorm:"polymorphic:Owner;"`
+		} `gorm:"embedded;embeddedPrefix:cat_"`
+		Dog struct {
+			ID     int
+			Name   string
+			UserID int
+			Toy    Toy   `gorm:"polymorphic:Owner;"`
+			Toys   []Toy `gorm:"polymorphic:Owner;"`
+		}
+		Toys []Toy `gorm:"polymorphic:Owner;"`
+	}
+
+	s, err := schema.Parse(&User{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatalf("Failed to parse schema, got error %v", err)
+	}
+
+	checkEmbeddedRelations(t, s.Relationships.EmbeddedRelations, map[string]EmbeddedRelations{
+		"Cat": {
+			Relations: map[string]Relation{
+				"Toy": {
+					Name:        "Toy",
+					Type:        schema.HasOne,
+					Schema:      "User",
+					FieldSchema: "Toy",
+					Polymorphic: Polymorphic{ID: "OwnerID", Type: "OwnerType", Value: "users"},
+					References: []Reference{
+						{ForeignKey: "OwnerType", ForeignSchema: "Toy", PrimaryValue: "users"},
+						{ForeignKey: "OwnerType", ForeignSchema: "Toy", PrimaryValue: "users"},
+					},
+				},
+				"Toys": {
+					Name:        "Toys",
+					Type:        schema.HasMany,
+					Schema:      "User",
+					FieldSchema: "Toy",
+					Polymorphic: Polymorphic{ID: "OwnerID", Type: "OwnerType", Value: "users"},
+					References: []Reference{
+						{ForeignKey: "OwnerType", ForeignSchema: "Toy", PrimaryValue: "users"},
+						{ForeignKey: "OwnerType", ForeignSchema: "Toy", PrimaryValue: "users"},
+					},
+				},
+			},
+		},
+	})
+}
+
+func TestEmbeddedBelongsTo(t *testing.T) {
+	type Country struct {
+		ID   int `gorm:"primaryKey"`
+		Name string
+	}
+	type Address struct {
+		CountryID int
+		Country   Country
+	}
+	type NestedAddress struct {
+		Address
+	}
+	type Org struct {
+		ID              int
+		PostalAddress   Address `gorm:"embedded;embeddedPrefix:postal_address_"`
+		VisitingAddress Address `gorm:"embedded;embeddedPrefix:visiting_address_"`
+		AddressID       int
+		Address         struct {
+			ID int
+			Address
+		}
+		NestedAddress *NestedAddress `gorm:"embedded;embeddedPrefix:nested_address_"`
+	}
+
+	s, err := schema.Parse(&Org{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Errorf("Failed to parse schema, got error %v", err)
+	}
+
+	checkEmbeddedRelations(t, s.Relationships.EmbeddedRelations, map[string]EmbeddedRelations{
+		"PostalAddress": {
+			Relations: map[string]Relation{
+				"Country": {
+					Name: "Country", Type: schema.BelongsTo, Schema: "Org", FieldSchema: "Country",
+					References: []Reference{
+						{PrimaryKey: "ID", PrimarySchema: "Country", ForeignKey: "CountryID", ForeignSchema: "Org"},
+					},
+				},
+			},
+		},
+		"VisitingAddress": {
+			Relations: map[string]Relation{
+				"Country": {
+					Name: "Country", Type: schema.BelongsTo, Schema: "Org", FieldSchema: "Country",
+					References: []Reference{
+						{PrimaryKey: "ID", PrimarySchema: "Country", ForeignKey: "CountryID", ForeignSchema: "Org"},
+					},
+				},
+			},
+		},
+		"NestedAddress": {
+			EmbeddedRelations: map[string]EmbeddedRelations{
+				"Address": {
+					Relations: map[string]Relation{
+						"Country": {
+							Name: "Country", Type: schema.BelongsTo, Schema: "Org", FieldSchema: "Country",
+							References: []Reference{
+								{PrimaryKey: "ID", PrimarySchema: "Country", ForeignKey: "CountryID", ForeignSchema: "Org"},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+}
+
+func TestVariableRelation(t *testing.T) {
+	var result struct {
+		User
+	}
+
+	checkStructRelation(t, &result, Relation{
+		Name: "Account", Type: schema.HasOne, Schema: "", FieldSchema: "Account",
+		References: []Reference{
+			{"ID", "", "UserID", "Account", "", true},
+		},
+	})
+
+	checkStructRelation(t, &result, Relation{
+		Name: "Company", Type: schema.BelongsTo, Schema: "", FieldSchema: "Company",
+		References: []Reference{
+			{"ID", "Company", "CompanyID", "", "", false},
+		},
+	})
+}
+
 func TestSameForeignKey(t *testing.T) {
 	type UserAux struct {
 		gorm.Model
@@ -481,4 +686,102 @@ func TestSameForeignKey(t *testing.T) {
 			},
 		},
 	)
+}
+
+func TestBelongsToSameForeignKey(t *testing.T) {
+	type User struct {
+		gorm.Model
+		Name string
+		UUID string
+	}
+
+	type UserAux struct {
+		gorm.Model
+		Aux  string
+		UUID string
+		User User `gorm:"ForeignKey:UUID;references:UUID;belongsTo"`
+	}
+
+	checkStructRelation(t, &UserAux{},
+		Relation{
+			Name: "User", Type: schema.BelongsTo, Schema: "UserAux", FieldSchema: "User",
+			References: []Reference{
+				{"UUID", "User", "UUID", "UserAux", "", false},
+			},
+		},
+	)
+}
+
+func TestHasOneWithSameForeignKey(t *testing.T) {
+	type Profile struct {
+		gorm.Model
+		Name         string
+		ProfileRefer int // not used in relationship
+	}
+
+	type User struct {
+		gorm.Model
+		Profile      Profile `gorm:"ForeignKey:ID;references:ProfileRefer"`
+		ProfileRefer int
+	}
+
+	checkStructRelation(t, &User{}, Relation{
+		Name: "Profile", Type: schema.HasOne, Schema: "User", FieldSchema: "Profile",
+		References: []Reference{{"ProfileRefer", "User", "ID", "Profile", "", true}},
+	})
+}
+
+func TestHasManySameForeignKey(t *testing.T) {
+	type Profile struct {
+		gorm.Model
+		Name      string
+		UserRefer uint
+	}
+
+	type User struct {
+		gorm.Model
+		UserRefer uint
+		Profile   []Profile `gorm:"ForeignKey:UserRefer"`
+	}
+
+	checkStructRelation(t, &User{}, Relation{
+		Name: "Profile", Type: schema.HasMany, Schema: "User", FieldSchema: "Profile",
+		References: []Reference{{"ID", "User", "UserRefer", "Profile", "", true}},
+	})
+}
+
+type Author struct {
+	gorm.Model
+}
+
+type Book struct {
+	gorm.Model
+	Author   Author
+	AuthorID uint
+}
+
+func (Book) TableName() string {
+	return "my_schema.a_very_very_very_very_very_very_very_very_long_table_name"
+}
+
+func TestParseConstraintNameWithSchemaQualifiedLongTableName(t *testing.T) {
+	s, err := schema.Parse(
+		&Book{},
+		&sync.Map{},
+		schema.NamingStrategy{IdentifierMaxLength: 64},
+	)
+	if err != nil {
+		t.Fatalf("Failed to parse schema")
+	}
+
+	expectedConstraintName := "fk_my_schema_a_very_very_very_very_very_very_very_very_l4db13eec"
+	constraint := s.Relationships.Relations["Author"].ParseConstraint()
+
+	if constraint.Name != expectedConstraintName {
+		t.Fatalf(
+			"expected constraint name %s, got %s",
+			expectedConstraintName,
+			constraint.Name,
+		)
+	}
 }
